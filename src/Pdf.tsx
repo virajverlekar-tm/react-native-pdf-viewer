@@ -105,6 +105,8 @@ type BaseListProps = {
 };
 
 type PdfProps = BaseListProps & {
+  scrollEnabled?: boolean;
+
   /**
    * PAS v1 annotation JSON string.
    */
@@ -196,7 +198,7 @@ function useMeasurePages(
  * Display a pdf.
  */
 export const Pdf = forwardRef((props: PdfProps, ref: React.Ref<PdfRef>) => {
-  const { onError, onLoadComplete, source } = props;
+  const { scrollEnabled = true, onError, onLoadComplete, source } = props;
 
   const [flatListLayout, setFlatListLayout] = useState<PageDim>({
     height: 0,
@@ -336,10 +338,9 @@ export const Pdf = forwardRef((props: PdfProps, ref: React.Ref<PdfRef>) => {
         flatListLayout.height !== 0 || pageDims.length === 0 ? pageDims : []
       }
       getItemLayout={getItemLayout}
-      initialNumToRender={1}
+      scrollEnabled={scrollEnabled}
       ItemSeparatorComponent={generateItemSeparator}
       keyExtractor={stringifyIndex}
-      maxToRenderPerBatch={2}
       onLayout={onLayout}
       ref={listRef}
       renderItem={renderItem}
