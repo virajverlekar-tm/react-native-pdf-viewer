@@ -19,14 +19,14 @@ jobs:
         path: |
           node_modules
           example/node_modules
-        key: ${{ hashFiles('package.json', 'example/package.json') }}
+        key: ${{ hashFiles('package.json', 'yarn.lock', 'example/package.json') }}
     - run: corepack enable
     - uses: actions/setup-node@v4
       with:
-        node-version: 20
-    - run: yarn && yarn example
+        node-version: 24
+    - run: yarn
       if: steps.cache-node.outputs.cache-hit != 'true'
     - run: yarn lint
-    - run: yarn typescript
+    - run: yarn typecheck
     - run: yarn test --coverage
     - run: yarn prepare

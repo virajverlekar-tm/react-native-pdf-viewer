@@ -1,35 +1,124 @@
-enum ResizeMode: String {
-    case CONTAIN = "contain"
-    case FIT_WIDTH = "fitWidth"
+@objc public enum ResizeMode: Int {
+    case CONTAIN, FIT_WIDTH
 }
 
-class PdfView: UIView {
-    @objc var annotationStr = "" { didSet { loadAnnotation(file: false) } }
-    @objc var annotation = "" { didSet { loadAnnotation(file: true) } }
-    @objc var page: NSNumber = 0 { didSet { renderPdf() } }
-    @objc var resizeMode = ResizeMode.CONTAIN.rawValue { didSet { validateResizeMode() } }
-    @objc var source = "" { didSet { renderPdf() } }
-    @objc var onPdfError: RCTBubblingEventBlock?
-    @objc var onPdfLoadComplete: RCTBubblingEventBlock?
+@objc(PdfViewImpl)
+public class PdfView: UIView {
+    private var annotation = ""
+    private var annotationStr = ""
+    private var page = 0
+    private var resizeMode = ResizeMode.CONTAIN
+    private var source = ""
 
-    private var annotationData = [AnnotationPage]()
-    private var previousBounds: CGRect = .zero
-    private var realResizeMode = ResizeMode.CONTAIN
+    public typealias PdfErrorHandler = (String) -> Void
+    @objc public var onPdfError: PdfErrorHandler?
 
-    override func layoutSubviews() {
-        if bounds != previousBounds {
+    public typealias PdfPageSizeHandler = (Int, Int) -> Void
+    @objc public var onPdfLoadComplete: PdfPageSizeHandler?
+    @objc public var onPdfMeasure: PdfPageSizeHandler?
+
+    private let annotLayer: AnnotationView
+    private var previousSize: CGSize = .zero
+
+    public override init(frame: CGRect) {
+        annotLayer = AnnotationView()
+        super.init(frame: frame)
+        annotLayer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        annotLayer.isOpaque = false
+        addSubview(annotLayer)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc public func measurePdf() {
+        guard !source.isEmpty, let dispatcher = onPdfMeasure else {
+            return
+        }
+        let url = URL(fileURLWithPath: source)
+        guard let pdf = CGPDFDocument(url as CFURL) else {
+            return
+        }
+        guard let pdfPage = pdf.page(at: page + 1) else {
+            return
+        }
+        // Apply crop and rotation to dimensions.
+        let pageBounds = pdfPage.getBoxRect(.cropBox)
+        let nextWidth: Int
+        let nextHeight: Int
+        if pdfPage.rotationAngle % 180 == 90 {
+            nextWidth = Int(pageBounds.height.rounded())
+            nextHeight = Int(pageBounds.width.rounded())
+        } else {
+            nextWidth = Int(pageBounds.width.rounded())
+            nextHeight = Int(pageBounds.height.rounded())
+        }
+        dispatcher(nextWidth, nextHeight)
+    }
+
+    @objc public func updateProps(annotStr: String) {
+        if annotationStr != annotStr {
+            annotationStr = annotStr
+            loadAnnotation(file: false)
+        }
+    }
+
+    @objc public func prepareForRecycle() {
+        source = ""
+        resizeMode = ResizeMode.CONTAIN
+        previousSize = .zero
+        annotation = ""
+        annotationStr = ""
+        annotLayer.setAnnotationData([])
+    }
+
+    @objc public func updateProps(annot: String, annotStr: String, pg: Int, rsMd: ResizeMode, src: String) {
+        var isDirty = false
+        var needsMeasure = false
+        if annotation != annot {
+            annotation = annot
+            loadAnnotation(file: true)
+        }
+        if annotationStr != annotStr {
+            annotationStr = annotStr
+            loadAnnotation(file: false)
+        }
+        if page != pg {
+            page = pg
+            isDirty = true
+            needsMeasure = true
+            annotLayer.setPage(pg)
+        }
+        if resizeMode != rsMd {
+            resizeMode = rsMd
+            isDirty = true
+        }
+        if source != src {
+            source = src
+            isDirty = true
+            needsMeasure = true
+        }
+        if needsMeasure {
+            measurePdf()
+        }
+        if isDirty {
             renderPdf()
-            previousBounds = bounds
+        }
+    }
+
+    public override func layoutSubviews() {
+        if bounds.size != previousSize {
+            previousSize = bounds.size
+            renderPdf()
+            annotLayer.setNeedsDisplay()
         }
         super.layoutSubviews()
     }
 
     private func loadAnnotation(file: Bool) {
         guard !annotation.isEmpty || !annotationStr.isEmpty else {
-            if !annotationData.isEmpty {
-                annotationData.removeAll()
-                renderPdf()
-            }
+            annotLayer.setAnnotationData([])
             return
         }
 
@@ -38,149 +127,76 @@ class PdfView: UIView {
             let data: Data;
             if (file) {
                 data = try Data(contentsOf: URL(fileURLWithPath: annotation))
-            }
-            else {
+            } else {
                 data = annotationStr.data(using: .utf8)!;
             }
-            annotationData = try decoder.decode([AnnotationPage].self, from: data)
+            annotLayer.setAnnotationData(try decoder.decode([AnnotationPage].self, from: data))
         } catch {
             dispatchOnError(
                 message: "Failed to load annotation from '\(annotation)'. \(error.localizedDescription)"
             )
             return
         }
-        renderPdf()
-    }
-
-    private func validateResizeMode() {
-        guard let resizeEnum = ResizeMode(rawValue: resizeMode) else {
-            dispatchOnError(message: "Unknown resizeMode '\(resizeMode)'.")
-            return
-        }
-
-        realResizeMode = resizeEnum
-        renderPdf()
-    }
-
-    private func parseColor(_ hex: String) -> UIColor {
-        // Parse HTML hex color. Assumes leading `#`.
-        guard let colorInt = UInt64(hex.dropFirst().prefix(6), radix: 16) else {
-            return UIColor.black
-        }
-        var alpha = CGFloat(1.0)
-        if hex.count == 9, let alphaInt = UInt64(hex.suffix(2), radix: 16) {
-            // Extract alpha channel.
-            alpha = CGFloat(alphaInt) / 255.0
-        }
-        return UIColor(
-            red: CGFloat((colorInt & 0xFF0000) >> 16) / 255.0,
-            green: CGFloat((colorInt & 0x00FF00) >> 8) / 255.0,
-            blue: CGFloat(colorInt & 0x0000FF) / 255.0,
-            alpha: alpha
-        )
-    }
-
-    private func makeCGPoint(_ point: [CGFloat], _ scaleX: CGFloat, _ scaleY: CGFloat) -> CGPoint {
-        return CGPoint(x: scaleX * point[0], y: scaleY * point[1])
-    }
-
-    private func computeDist(_ a: [CGFloat], _ b: [CGFloat], scaleX: CGFloat, scaleY: CGFloat) -> CGFloat {
-        return hypot(scaleX * (a[0] - b[0]), scaleY * (a[1] - b[1]))
-    }
-
-    private func computePath(_ context: CGContext, _ coordinates: [[CGFloat]], scaleX: CGFloat, scaleY: CGFloat) {
-        // Start path at the first point.
-        var prevPoint = coordinates[0]
-        context.move(to: makeCGPoint(prevPoint, scaleX, scaleY))
-        for point in coordinates.dropFirst() {
-            guard computeDist(prevPoint, point, scaleX: scaleX, scaleY: scaleY) > 3 else {
-                // Smooth small irregularities.
-                continue
-            }
-            let midX = (prevPoint[0] + point[0]) / 2
-            let midY = (prevPoint[1] + point[1]) / 2
-            // Draw line to the midpoint between the next two points. Use the first
-            // point as curve control (line will bend toward it).
-            context.addQuadCurve(
-                to: makeCGPoint([midX, midY], scaleX, scaleY),
-                control: makeCGPoint(prevPoint, scaleX, scaleY)
-            )
-            prevPoint = point
-        }
-        // Draw line to the last point.
-        prevPoint = coordinates.last!
-        context.addLine(to: makeCGPoint(prevPoint, scaleX, scaleY))
-    }
-
-    private func renderAnnotation(_ context: CGContext, scaleX: CGFloat, scaleY: CGFloat) {
-        guard page.intValue < annotationData.count else {
-            // No annotation data for current page.
-            return
-        }
-        let annotationPage = annotationData[page.intValue]
-
-        // Draw strokes.
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-        for stroke in annotationPage.strokes {
-            guard stroke.path.count > 1 else {
-                continue
-            }
-            context.setStrokeColor(parseColor(stroke.color).cgColor)
-            context.setLineWidth(stroke.width)
-
-            context.beginPath()
-            computePath(context, stroke.path, scaleX: scaleX, scaleY: scaleY)
-            context.strokePath()
-        }
-
-        // Draw text.
-        for msg in annotationPage.text {
-            // Increase the font for larger views, but do so at a reduced rate.
-            let scaledFont = 9 + (msg.fontSize * scaleX) / 1000
-            msg.str.draw(
-                at: makeCGPoint(msg.point, scaleX, scaleY),
-                withAttributes: [
-                    .font: UIFont.systemFont(ofSize: scaledFont),
-                    .foregroundColor: parseColor(msg.color)
-                ]
-            )
-        }
     }
 
     private func renderPdf() {
-        guard !frame.isEmpty && !source.isEmpty else {
+        guard bounds.width > 2 && bounds.height > 2 && !source.isEmpty else {
             // View layout not yet complete, or nothing to render.
             return
         }
 
-        let currentFrame = frame
+        var currentSize = bounds.size
         DispatchQueue.global().async {
             let url = URL(fileURLWithPath: self.source)
             guard let pdf = CGPDFDocument(url as CFURL) else {
                 self.dispatchOnError(message: "Failed to open '\(self.source)' for reading.")
                 return
             }
-            guard let pdfPage = pdf.page(at: self.page.intValue + 1) else {
+            guard let pdfPage = pdf.page(at: self.page + 1) else {
                 self.dispatchOnError(message: "Failed to open page '\(self.page)' of '\(self.source)' for reading.")
                 return
             }
 
-            UIGraphicsBeginImageContextWithOptions(currentFrame.size, true, 0.0)
-            guard let context = UIGraphicsGetCurrentContext() else {
-                UIGraphicsEndImageContext()
-                self.dispatchOnError(message: "Failed to open graphics context for rendering '\(self.source)'.")
-                return
+            // TODO: Is it possible to know when layout has stabilized, to
+            // avoid guess-and-check rendering?
+            for _ in 1...4 {
+                let (pageHeight, pageWidth, rendered) = self.doRenderPage(currentSize: currentSize, pdfPage: pdfPage)
+                var abort = false
+                var success = false
+                DispatchQueue.main.sync {
+                    if self.bounds.width < 2 || self.bounds.height < 2 {
+                        abort = true
+                    } else if self.bounds.size == currentSize {
+                        success = true
+                        self.layer.contents = rendered.cgImage
+                    } else {
+                        currentSize = self.bounds.size
+                    }
+                }
+                if abort {
+                    break
+                } else if success {
+                    self.dispatchOnLoadComplete(pageWidth: pageWidth, pageHeight: pageHeight)
+                    break
+                }
             }
+        }
+    }
+
+    private func doRenderPage(currentSize: CGSize, pdfPage: CGPDFPage) -> (CGFloat, CGFloat, UIImage) {
+        var pageHeight: CGFloat = -1;
+        var pageWidth: CGFloat = -1;
+        let format = UIGraphicsImageRendererFormat()
+        format.opaque = true
+        let rendered = UIGraphicsImageRenderer(size: currentSize, format: format).image { (uiCtx) in
+            let context = uiCtx.cgContext
             context.saveGState()
 
             // Default color for opaque context is black, so fill with white.
             UIColor.white.setFill()
-            context.fill(currentFrame)
+            context.fill(CGRect(origin: CGPoint(), size: currentSize))
 
             let pageBounds = pdfPage.getBoxRect(.cropBox)
-            let pageHeight: CGFloat;
-            let pageWidth: CGFloat;
             if pdfPage.rotationAngle % 180 == 90 {
                 pageHeight = pageBounds.width
                 pageWidth = pageBounds.height
@@ -189,20 +205,20 @@ class PdfView: UIView {
                 pageWidth = pageBounds.width
             }
             // Change context coordinate system to pdf coordinates.
-            let targetHeight = currentFrame.width * pageHeight / pageWidth
-            if self.realResizeMode == ResizeMode.CONTAIN {
+            let targetHeight = currentSize.width * pageHeight / pageWidth
+            if self.resizeMode == ResizeMode.CONTAIN {
                 // Shift/resize so render is contained and centered in the context.
-                if targetHeight > currentFrame.height {
-                    let targetWidth = currentFrame.height * pageWidth / pageHeight
-                    context.translateBy(x: (currentFrame.width - targetWidth) / 2, y: 0.0)
-                    let scaleFactor = currentFrame.height / targetHeight
+                if targetHeight > currentSize.height {
+                    let targetWidth = currentSize.height * pageWidth / pageHeight
+                    context.translateBy(x: (currentSize.width - targetWidth) / 2, y: 0.0)
+                    let scaleFactor = currentSize.height / targetHeight
                     context.scaleBy(x: scaleFactor, y: scaleFactor)
                 } else {
-                    context.translateBy(x: 0.0, y: (currentFrame.height - targetHeight) / 2)
+                    context.translateBy(x: 0.0, y: (currentSize.height - targetHeight) / 2)
                 }
             }
             context.translateBy(x: 0.0, y: targetHeight)
-            context.scaleBy(x: currentFrame.width / pageWidth, y: -targetHeight / pageHeight)
+            context.scaleBy(x: currentSize.width / pageWidth, y: -targetHeight / pageHeight)
             context.concatenate(pdfPage.getDrawingTransform(
                 .cropBox,
                 rect: CGRect(x: 0.0, y: 0.0, width: pageWidth, height: pageHeight),
@@ -214,34 +230,24 @@ class PdfView: UIView {
             context.setRenderingIntent(.defaultIntent)
             context.drawPDFPage(pdfPage)
             context.restoreGState()
-
-            context.saveGState()
-            self.renderAnnotation(context, scaleX: currentFrame.width, scaleY: currentFrame.height)
-            context.restoreGState()
-
-            let rendered = UIGraphicsGetImageFromCurrentImageContext()
-
-            UIGraphicsEndImageContext()
-
-            DispatchQueue.main.async {
-                // Post new bitmap for display.
-                self.layer.contents = rendered?.cgImage
-            }
-            self.dispatchOnLoadComplete(pageWidth: pageWidth, pageHeight: pageHeight)
         }
+        return (pageHeight, pageWidth, rendered)
     }
 
     private func dispatchOnError(message: String) {
-        guard let dispatcher = onPdfError else {
-            return
+        // Queue message to give RN core a chance to init event emitters.
+        DispatchQueue.main.async {
+            guard let dispatcher = self.onPdfError else {
+                return
+            }
+            dispatcher(message)
         }
-        dispatcher(["message": message])
     }
 
     private func dispatchOnLoadComplete(pageWidth: CGFloat, pageHeight: CGFloat) {
         guard let dispatcher = onPdfLoadComplete else {
             return
         }
-        dispatcher(["width": pageWidth, "height": pageHeight])
+        dispatcher(Int(pageWidth.rounded()), Int(pageHeight.rounded()))
     }
 }

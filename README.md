@@ -20,7 +20,7 @@ Version 2.x, adds render support for annotations conforming the
 [PAS standard v1](https://github.com/alpha0010/paged-annotation). If
 annotation support is not needed, use 1.x for slightly reduced size.
 
-<img src="docs/annotation.png" alt="PDF Annotation" height="400">
+<img src="docs/annotation.png" alt="PDF Annotation" height="400" width="225">
 
 ## Installation
 
@@ -30,6 +30,13 @@ npm install react-native-pdf-light
 
 If iOS build fails with `Undefined symbol: __swift_FORCE_LOAD_...`, add an
 empty `.swift` file to the xcode project.
+
+### Compatibility
+
+| React Native | react-native-pdf-light |
+| ------------ | ---------------------- |
+| old arch     | 1.x.x, 2.x.x           |
+| new arch     | 3.x.x                  |
 
 ## Usage
 
@@ -79,6 +86,7 @@ Props:
 
 The following props are forwarded to the underlying
 [`FlatList`](https://reactnative.dev/docs/flatlist) component:
+- `contentContainerStyle`
 - `initialScrollIndex`
 - `ListEmptyComponent`
 - `onMomentumScrollBegin`
@@ -118,6 +126,8 @@ display mode.
 
 Props:
 - All props from `PdfView`
+- `insets: { top: number; right: number; bottom: number; left: number }`
+  - Optional: Content padding for safe area handling.
 - `onZoomIn: () => void`
   - Optional: Callback when view starts to zoom.
 - `onZoomReset: () => void`

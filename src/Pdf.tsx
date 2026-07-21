@@ -1,4 +1,5 @@
-import React, {
+import {
+  type Ref,
   forwardRef,
   useCallback,
   useEffect,
@@ -6,18 +7,19 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import {
-  FlatList,
+import { FlatList, StyleSheet, View } from 'react-native';
+import type {
   FlatListProps,
   LayoutChangeEvent,
   ListRenderItemInfo,
   NativeScrollEvent,
   NativeSyntheticEvent,
-  StyleSheet,
-  View,
+  StyleProp,
+  ViewStyle,
 } from 'react-native';
 
-import { PageDim, PdfUtil } from './PdfUtil';
+import type { PageDim } from './NativePdfUtil';
+import { PdfUtil } from './PdfUtil';
 import { PdfView } from './PdfView';
 
 export type PageMeasurement = {
@@ -36,6 +38,12 @@ export type PageMeasurement = {
  * Optional props, forwarded to the underlying `FlatList` component.
  */
 type BaseListProps = {
+  /**
+   * These styles will be applied to the scroll view content container which
+   * wraps all of the child views.
+   */
+  contentContainerStyle?: StyleProp<ViewStyle>;
+
   /**
    * Instead of starting at the top with the first item, start at
    * initialScrollIndex.
@@ -197,7 +205,7 @@ function useMeasurePages(
 /**
  * Display a pdf.
  */
-export const Pdf = forwardRef((props: PdfProps, ref: React.Ref<PdfRef>) => {
+export const Pdf = forwardRef((props: PdfProps, ref: Ref<PdfRef>) => {
   const { scrollEnabled = true, onError, onLoadComplete, source } = props;
 
   const [flatListLayout, setFlatListLayout] = useState<PageDim>({
@@ -262,7 +270,7 @@ export const Pdf = forwardRef((props: PdfProps, ref: React.Ref<PdfRef>) => {
   );
 
   const getItemLayout = useCallback(
-    (data: PageDim[] | null | undefined, index: number) => {
+    (data: Readonly<ArrayLike<PageDim>> | null | undefined, index: number) => {
       // Default height, so layout computation will always return non-zero.
       // This case should never occur.
       let itemHeight = 100;
@@ -275,7 +283,8 @@ export const Pdf = forwardRef((props: PdfProps, ref: React.Ref<PdfRef>) => {
         );
       } else {
         const bound = maxPageHeight ?? Number.MAX_VALUE;
-        let pageSize = data[index];
+        const fallbackSize = { height: 1, width: 1 };
+        let pageSize = data[index] ?? fallbackSize;
         itemHeight = Math.min(
           bound,
           (flatListLayout.width * pageSize.height) / pageSize.width
@@ -283,7 +292,7 @@ export const Pdf = forwardRef((props: PdfProps, ref: React.Ref<PdfRef>) => {
         // Add up the separators and heights of pages before the current page.
         offset = 0;
         for (let i = 0; i < index; ++i) {
-          pageSize = data[i];
+          pageSize = data[i] ?? fallbackSize;
           offset +=
             separatorSize +
             Math.min(
@@ -334,6 +343,7 @@ export const Pdf = forwardRef((props: PdfProps, ref: React.Ref<PdfRef>) => {
 
   return (
     <FlatList
+      contentContainerStyle={props.contentContainerStyle}
       data={
         flatListLayout.height !== 0 || pageDims.length === 0 ? pageDims : []
       }

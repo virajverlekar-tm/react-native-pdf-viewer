@@ -1,10 +1,11 @@
-import React, { useCallback } from 'react';
-import {
+import { useCallback, useImperativeHandle, useRef } from 'react';
+import type {
   LayoutChangeEvent,
   NativeSyntheticEvent,
-  requireNativeComponent,
   ViewStyle,
 } from 'react-native';
+
+import PdfViewNative, { Commands } from './PdfViewNativeComponent';
 import { asPath } from './Util';
 
 export type ErrorEvent = { message: string };
@@ -13,17 +14,7 @@ export type LoadCompleteEvent = { height: number; width: number };
 
 export type ResizeMode = 'contain' | 'fitWidth';
 
-type PdfViewNativeProps = {
-  annotation?: string;
-  annotationStr?: string;
-  onLayout?: (event: LayoutChangeEvent) => void;
-  onPdfError: (event: NativeSyntheticEvent<ErrorEvent>) => void;
-  onPdfLoadComplete: (event: NativeSyntheticEvent<LoadCompleteEvent>) => void;
-  page: number;
-  resizeMode?: ResizeMode;
-  source: string;
-  style?: ViewStyle;
-};
+export type PdfViewRef = { setAnnotation(annotation: string): void };
 
 export type PdfViewProps = {
   /**
@@ -60,6 +51,8 @@ export type PdfViewProps = {
    */
   page: number;
 
+  ref?: React.RefObject<PdfViewRef | null>;
+
   /**
    * How pdf page should be scaled to fit in view dimensions.
    *
@@ -84,13 +77,21 @@ export type PdfViewProps = {
   testID?: string;
 };
 
-const PdfViewNative = requireNativeComponent<PdfViewNativeProps>('RNPdfView');
-
 /**
  * Single page of a pdf.
  */
 export function PdfView(props: PdfViewProps) {
   const { onError, onLayout, onLoadComplete } = props;
+
+  const nativeRef = useRef<React.ComponentRef<typeof PdfViewNative>>(null);
+
+  useImperativeHandle(props.ref, () => ({
+    setAnnotation: (annotation: string) => {
+      if (nativeRef.current != null) {
+        Commands.imperativeApplyAnnotation(nativeRef.current, annotation);
+      }
+    },
+  }));
 
   const onPdfError = useCallback(
     (event: NativeSyntheticEvent<ErrorEvent>) => {
@@ -117,6 +118,7 @@ export function PdfView(props: PdfViewProps) {
       onPdfError={onPdfError}
       onPdfLoadComplete={onPdfLoadComplete}
       page={props.page}
+      ref={nativeRef}
       resizeMode={props.resizeMode}
       source={asPath(props.source)}
       style={props.style}
